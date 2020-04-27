@@ -1,9 +1,16 @@
 #include <stdio.h>
 #include <string.h>
+#include <errno.h>
+#include <unistd.h>
+#include <stdlib.h>
+#include <wait.h>
 
 #include "mypopen.h"
 
-#define RETURN_FAILURE 0
+#define RETURN_FAILURE -1
+
+//int removePipe(void);
+
 
 /**
  * Return:
@@ -13,83 +20,169 @@
 
 FILE* mypopen(const char *command, const char *mode){
 
-    //check if mode == "read" || "write"
-        //if error --> return NULL and set errno
+    int p[2];
+    int forkResult = -1;
+
     if (strcmp(mode, "r") != 0 && strcmp(mode, "w") != 0){
+        //remove printf
         printf("Error occured due to incorrect parameter\n");
-        // write errno
+        errno = EINVAL; //Invalid Argument
         return NULL;
     }
     
-    int p[2];
-    // Create unnamed pipe with pipe() 
-        /**
-         * int pipe(int fds[2]);
-         * Parameters :
-         * fd[0] will be the fd(file descriptor) for the 
-         * read end of pipe.
-         * fd[1] will be the fd for the write end of pipe.
-         * Returns : 0 on Success.
-         * -1 on error.
-        */
     if (pipe(p)!=0){
         printf("Error occured at creating the pipe!\n");
-        // write errno
+        //pipe() might write errno on its own --> ask Galla 
+        printf("errno: %d\n", errno);
+        //errno = EPIPE; //Broken Pipe
         return NULL;
-    }else{
     }
-    
+
+
     // Create Child process
-    int forkResult = fork();
-    
+    forkResult = fork();
     if (forkResult<0){
         printf("Error occured at forking!\n");
-        //write errno;
+        //fork() might set errno --> ask Galla
+        printf("errno: %d\n", errno);
         return NULL;
     }else if (forkResult == 0){
         //In Child Process
         
         //Properly associate stdin or stdout
-        
         if (strcmp(mode, "r") == 0){
-            //p[0] --> close
-            //Map p[1]-->STDOUT_FILENO with dub()
-            //p[1] --> close
+
+            if(close(p[0]) < 0){
+                printf("Error occured at close(p[0])!\n");
+                //close() might set errno --> ask Galla
+                printf("errno: %d\n", errno);
+                exit(EXIT_FAILURE);
+            }
+
+            if (dup2(p[1], STDOUT_FILENO) < 0){
+                printf("Error occured at dup2(p[1], STDOUT_FILENO)!\n");
+                //dup2() might set errno --> ask Galla
+                printf("errno: %d\n", errno);
+                exit(EXIT_FAILURE);
+            }
+            
+            if(close(p[1]) < 0){
+                printf("Error occured at close(p[1])!\n");
+                //close() might set errno --> ask Galla
+                exit(EXIT_FAILURE);
+            }
         }else if (strcmp(mode, "w") == 0){
-            //p[1] --> close
-            //Map p[0]-->STDIN_FILENO with dub()
-            //p[0] --> close
+            
+            if(close(p[1]) < 0){
+                printf("Error occured at close(p[1])!\n");
+                //close() might set errno --> ask Galla
+                printf("errno: %d\n", errno);
+                exit(EXIT_FAILURE);
+            }
 
-
-            //Clear what to do when write
+            if (dup2(p[0], STDIN_FILENO) < 0){
+                printf("Error occured at dup2(p[0], STDIN_FILENO)!\n");
+                //dup2() might set errno --> ask Galla
+                printf("errno: %d\n", errno);
+                exit(EXIT_FAILURE);
+            }
+            
+            if(close(p[0]) < 0){
+                printf("Error occured at close(p[0])!\n");
+                //close() might set errno --> ask Galla
+                exit(EXIT_FAILURE);
+            }
         }
-        
         //start new shell and execute command
+
+        execl("/bin/sh", "sh", "-c" ,command,NULL);
+        printf("Error occured at execl()!\n");
+        errno = EINVAL; //Invalid Argument
+        printf("errno: %d\n", errno);
+        exit(EXIT_FAILURE);
+
         //Flush required?
-        //End process with exit() instead of return to avoid 2 returns
-        /* code */
+
     }else if (forkResult > 0){
         //In Parent Process
         
-        
         if (strcmp(mode, "r") == 0){
-            //p[1] --> close
-            //Map p[0] to the return-filepointer
-            //associate fp = fdopen(p[0], "r");
+            if(close(p[1]) < 0){
+                printf("Error occured at close(p[1])!\n");
+                //close() might set errno --> ask Galla
+                printf("errno: %d\n", errno);
+                return NULL;
+            }
+            
+            FILE* fp = fdopen(p[0], "r");
+            if(fp == NULL){
+                printf("Error occured at fdopen(p[1], 'r')!\n");
+                //close() might set errno --> ask Galla
+                printf("errno: %d\n", errno);
+                return NULL;
+            }else{
+                return fp;
+            }
         }else if (strcmp(mode, "w") == 0){
-            //p[0] --> close
-            //Map p[1] to the return-filepointer
-            //associate fp = fdopen(p[1], "w");
+            if(close(p[0]) < 0){
+                printf("Error occured at close(p[0])!\n");
+                //close() might set errno --> ask Galla
+                printf("errno: %d\n", errno);
+                return NULL;
+            }
+            
+            FILE* fp = fdopen(p[1], "w");
+            if(fp == NULL){
+                printf("Error occured at fdopen(p[1], 'w')!\n");
+                //close() might set errno --> ask Galla
+                printf("errno: %d\n", errno);
+                return NULL;
+            }else{
+                return fp;
+            }
+
         }
-        //End process with return fp;
     }
-    
-    
-    //printf("Hello from mypopen!\n");
+    return NULL;
 }
 
 int mypclose(FILE *stream){
 
-    //tbd
-    printf("Hello from mypclose!\n");
+    pid_t child_pid = 0;
+    pid_t wait_pid;
+    int pstatus;
+    //int waitreturn = 0;
+
+    if(fclose(stream) != 0){
+        printf("Error occured at fclose()!\n");
+        //fclose() might set errno --> ask Galla
+        printf("errno: %d\n", errno);
+        return EXIT_FAILURE;
+    }
+
+    while((wait_pid = waitpid(child_pid, &pstatus,0)) != child_pid) 
+    {
+        if(wait_pid == -1)
+        {
+            if (errno == EINTR)
+            {
+                continue;
+            }
+            printf("Error occured at waitpid()! Check error number below!\n");
+            //waitpid() might set errno --> ask Galla
+            printf("errno: %d = %s\n", errno, strerror(errno));
+            return RETURN_FAILURE;
+        }else{
+            if(WIFEXITED(pstatus))
+            {
+                //printf("exited, status=%d\n", WEXITSTATUS(pstatus));
+                return WEXITSTATUS(pstatus);
+            }else{
+                //printf("Error idk \n");
+                return RETURN_FAILURE;
+            }
+        }
+    }
+
+    return RETURN_FAILURE;
 }
